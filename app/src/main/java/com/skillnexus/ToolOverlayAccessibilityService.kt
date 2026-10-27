@@ -6,7 +6,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -19,14 +18,14 @@ import android.widget.TextView
 /**
  * Best-effort visual indicator for activity visible in selected AI apps.
  * Android does not expose those apps' internal tool-call events to third parties.
- * Therefore labels are explicitly heuristic and must not be read as confirmed tool calls.
+ * Labels are heuristic and must not be read as confirmed tool calls.
  */
 class ToolOverlayAccessibilityService : AccessibilityService() {
     private lateinit var windowManager: WindowManager
-    private var overlay: View? = null
+    private var overlay: SkillOverlayView? = null
     private val handler = Handler(Looper.getMainLooper())
-    private var hideRunnable: Runnable? = null
     private var lastSignal = ""
+    private var serviceReady = false
 
     private val monitoredPackages = setOf(
         "com.anthropic.claude",
@@ -38,23 +37,51 @@ class ToolOverlayAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        serviceReady = true
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-            notificationTimeout = 250
+            notificationTimeout = 500
         }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
+        if (!serviceReady) return
+
         val packageName = event.packageName?.toString() ?: return
+
+        // Ignore this app's own overlay and other apps' incidental content events.
+        // Keyboard/IME events are common while chatting; hiding on every unrelated
+        // event caused the overlay to repeatedly disappear and reappear.
+        if (packageName == applicationContext.packageName) return
         if (packageName !in monitoredPackages) {
-            if (overlay != null) hideOverlay()
+            // Content-change events from keyboards and system UI are frequent.
+            // Only a real window transition should hide the overlay; never use an
+            // inactivity timer, because streaming responses produce event gaps.
+            val systemPackages = setOf(
+                "com.android.systemui",
+                "com.google.android.inputmethod.latin",
+                "com.samsung.android.honeyboard",
+                "com.android.inputmethod.latin",
+                "com.google.android.inputmethod.latin.beta"
+            )
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                packageName !in systemPackages
+            ) {
+                hideOverlay()
+            }
             return
         }
+
+        // Ignore event types that are unlikely to provide useful UI activity.
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+            event.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+        ) return
 
         val text = buildString {
             event.text?.forEach { append(it).append(' ') }
@@ -69,7 +96,6 @@ class ToolOverlayAccessibilityService : AccessibilityService() {
             listOf("writing code", "generating code", "코드 작성").any(text::contains) -> "CODING"
             else -> "AI ACTIVITY"
         }
-        lastSignal = skill
         showOverlay(skill)
     }
 
@@ -77,8 +103,23 @@ class ToolOverlayAccessibilityService : AccessibilityService() {
         hideOverlay()
     }
 
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        hideOverlay()
+        serviceReady = false
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        hideOverlay()
+        serviceReady = false
+        super.onDestroy()
+    }
+
     private fun showOverlay(skill: String) {
+        // All view/window operations are serialized on the main thread.
         handler.post {
+            if (!serviceReady || !::windowManager.isInitialized) return@post
+
             if (overlay == null) {
                 val view = SkillOverlayView()
                 val height = (resources.displayMetrics.heightPixels * 0.33f).toInt()
@@ -97,24 +138,37 @@ class ToolOverlayAccessibilityService : AccessibilityService() {
                     windowManager.addView(view, params)
                     overlay = view
                 } catch (_: Exception) {
+                    // Keep the service alive; a later eligible event can retry.
                     return@post
                 }
             }
-            (overlay as? SkillOverlayView)?.setSkill(skill)
-            hideRunnable?.let(handler::removeCallbacks)
-            hideRunnable = Runnable { hideOverlay() }
-            handler.postDelayed(hideRunnable!!, 2800L)
+
+            // Avoid unnecessary redraws when the inferred label has not changed.
+            if (lastSignal != skill) {
+                lastSignal = skill
+                overlay?.setSkill(skill)
+            }
+
+            // Keep the same overlay attached while the monitored app is active.
+            // A timeout here made it disappear during quiet periods and reappear
+            // on the next event, which looked like rapid flickering.
         }
     }
 
     private fun hideOverlay() {
         handler.post {
-            hideRunnable?.let(handler::removeCallbacks)
-            hideRunnable = null
-            overlay?.let {
-                try { windowManager.removeView(it) } catch (_: Exception) { }
-            }
-            overlay = null
+            removeOverlayNow()
+        }
+    }
+
+    private fun removeOverlayNow() {
+        val current = overlay ?: return
+        overlay = null
+        lastSignal = ""
+        try {
+            if (::windowManager.isInitialized) windowManager.removeView(current)
+        } catch (_: Exception) {
+            // The system may already have detached the accessibility overlay.
         }
     }
 
@@ -170,14 +224,29 @@ class ToolOverlayAccessibilityService : AccessibilityService() {
         private var phase = 0f
         private val frame = object : Runnable {
             override fun run() {
+                if (!isAttachedToWindow) return
                 phase = (phase + 0.08f) % 1f
                 invalidate()
                 postDelayed(this, 40L)
             }
         }
 
-        init { post(frame) }
-        fun setSkill(value: String) { skill = value; invalidate() }
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            removeCallbacks(frame)
+            post(frame)
+        }
+
+        override fun onDetachedFromWindow() {
+            removeCallbacks(frame)
+            super.onDetachedFromWindow()
+        }
+
+        fun setSkill(value: String) {
+            if (skill == value) return
+            skill = value
+            invalidate()
+        }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
