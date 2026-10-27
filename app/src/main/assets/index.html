@@ -1,58 +1,321 @@
+
+
 <!DOCTYPE html>
+
 <html lang="ko">
+
 <head>
+
 <meta charset="UTF-8">
+
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Skill Nexus - Real AI Tool</title>
+
+<title>SKILL NEXUS - Real AI Tool</title>
+
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;color:#fff;font-family:-apple-system, sans-serif;overflow:hidden;height:100vh}
-#island{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#111;border:1px solid rgba(0,245,255,0.3);border-radius:30px;padding:8px 18px;display:flex;align-items:center;gap:10px;z-index:1000;transition:all 0.5s;min-width:180px;justify-content:center}
-#island.expanded{top:0;left:0;right:0;transform:none;border-radius:0 0 24px 24px;padding:20px;min-width:0;height:33vh;flex-direction:column;background:#0a0a0f;border-color:#00F5FF}
-.skill-node{position:absolute;width:44px;height:28px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#00F5FF;transition:all 0.4s}
-.skill-node.active{background:#00F5FF;color:#000;box-shadow:0 0 20px #00F5FF;transform:translate(-50%,-50%) scale(1.3)}
-#chatLog{flex:1;overflow-y:auto;padding:12px 12px 100px 12px;display:flex;flex-direction:column;gap:8px;margin-top:70px}
-.msg{max-width:85%;padding:10px 14px;border-radius:18px;font-size:13px}
-.msg.user{align-self:flex-end;background:#fff;color:#000}
-.msg.ai{align-self:flex-start;background:#1a1a24;color:#fff}
-#inputBar{position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.9);padding:12px;display:flex;gap:8px}
+
+* { box-sizing: border-box; }
+
+body {
+
+  margin: 0; background: #050508; color: white;
+
+  font: 14px Arial, sans-serif;
+
+}
+
+#island {
+
+  position: fixed; z-index: 10; top: 12px; left: 50%;
+
+  transform: translateX(-50%); width: 190px; padding: 12px;
+
+  border: 1px solid #164b52; border-radius: 24px;
+
+  background: #11151b; text-align: center;
+
+  transition: all .35s ease;
+
+}
+
+#island.expanded {
+
+  top: 0; left: 0; transform: none; width: 100%;
+
+  height: 33vh; border-radius: 0 0 24px 24px;
+
+  border-color: #00f5ff; background: #0a1018;
+
+}
+
+#islandStatus { color: #00f5ff; font-weight: bold; }
+
+#chatLog {
+
+  padding: 85px 12px 150px; display: flex;
+
+  flex-direction: column; gap: 10px;
+
+}
+
+.msg { padding: 12px; border-radius: 14px; max-width: 90%;
+
+       overflow-wrap: anywhere; }
+
+.user { align-self: flex-end; background: #e8faff; color: #111; }
+
+.ai { align-self: flex-start; background: #1a1d27; }
+
+#inputBar {
+
+  position: fixed; bottom: 0; width: 100%; display: flex;
+
+  gap: 8px; padding: 12px; background: #09090d;
+
+}
+
+input, button {
+
+  padding: 12px; border-radius: 12px; border: 1px solid #333;
+
+}
+
+input { flex: 1; min-width: 0; background: #17171d; color: white; }
+
+button { background: #00d9e8; color: #000; font-weight: bold; }
+
+#eventLog { padding: 12px; color: #a5f5fa; font-size: 12px; }
+
 </style>
+
 </head>
+
 <body>
-<div id="island">⚡ SKILL NEXUS 대기중</div>
-<div id="chatLog"><div class="msg ai">실제 AI 툴 호출 시에만 아일랜드가 움직이는 진짜 버전! "검색해줘" "코드 짜줘" 입력해보세요</div></div>
-<div id="inputBar">
-<input id="userInput" placeholder="예: 검색해서 정리해줘" style="flex:1;padding:12px;border-radius:22px;background:#222;color:#fff;border:1px solid #333">
-<button onclick="send()" style="width:44px;height:44px;border-radius:50%">↑</button>
+
+<div id="island">
+
+  <div id="islandStatus">SKILL NEXUS · READY</div>
+
+  <div id="activeTool"></div>
+
 </div>
+
+<div id="chatLog">
+
+  <div class="msg ai">
+
+    SKILL NEXUS 준비 완료. 검색 요청을 입력해 보세요.
+
+  </div>
+
+</div>
+
+<div id="eventLog">EVENT LOG · 대기 중</div>
+
+<div id="inputBar">
+
+  <input id="userInput" placeholder="예: 웹에서 검색해 줘">
+
+  <button id="sendButton">전송</button>
+
+</div>
+
 <script>
-const skills=['REASONING','CODING','VISION','BROWSER','RESEARCH','SHELL','MEMORY','LEARNING'];
-function detectTools(t){
-  const tools=[];
-  if(t.includes('검색')||t.includes('찾아')) tools.push('BROWSER');
-  if(t.includes('코드')||t.includes('코딩')) tools.push('CODING');
-  if(t.includes('리서치')||t.includes('조사')) tools.push('RESEARCH');
-  if(t.includes('추론')||t.includes('생각')) tools.push('REASONING');
-  if(tools.length==0 && t.length>10) tools.push('RESEARCH');
-  return tools;
+
+const skills = [
+
+  "REASONING", "CODING", "VISION", "BROWSER",
+
+  "RESEARCH", "SHELL", "MEMORY", "LEARNING"
+
+];
+
+let hideTimer = null;
+
+function detectTools(text) {
+
+  const q = text.trim().toLowerCase();
+
+  const tools = [];
+
+  if (/(검색|웹에서 찾아|인터넷에서 찾아)/.test(q))
+
+    tools.push("BROWSER");
+
+  if (/(코드 작성|코드 짜|코딩|프로그램 만들어)/.test(q))
+
+    tools.push("CODING");
+
+  if (/(리서치|자료 조사|조사해 줘)/.test(q))
+
+    tools.push("RESEARCH");
+
+  if (/(단계별 추론|논리적으로 추론)/.test(q))
+
+    tools.push("REASONING");
+
+  return [...new Set(tools)];
+
 }
-function expandIsland(tool,q){
-  const island=document.getElementById('island');
-  island.classList.add('expanded');
-  island.innerHTML='🔵 LIVE - '+tool+' 호출중! '+q;
-  setTimeout(()=>{island.classList.remove('expanded');island.innerHTML='⚡ SKILL NEXUS 대기중'},8000);
+
+function addMessage(type, text) {
+
+  const el = document.createElement("div");
+
+  el.className = "msg " + type;
+
+  el.textContent = text;
+
+  document.getElementById("chatLog").appendChild(el);
+
+  el.scrollIntoView({ behavior: "smooth", block: "end" });
+
 }
-function send(){
-  const q=document.getElementById('userInput').value;
-  if(!q) return;
-  const tools=detectTools(q);
-  if(tools.length==0) return;
-  tools.forEach(t=>{
-    console.log('REAL_CALL: skill_nexus.callTool("'+t+'")');
-    expandIsland(t,q);
+
+function addEventLog(tool, query, status) {
+
+  const time = new Date().toLocaleTimeString("ko-KR", {
+
+    hour12: false
+
   });
-  document.getElementById('userInput').value='';
+
+  const log = document.createElement("div");
+
+  log.textContent =
+
+    `${time} → ${tool} ${status}: ${query}`;
+
+  const box = document.getElementById("eventLog");
+
+  box.prepend(log);
+
+  while (box.children.length > 8) {
+
+    box.removeChild(box.lastChild);
+
+  }
+
 }
+
+function expandIsland(tool, query) {
+
+  const island = document.getElementById("island");
+
+  island.classList.add("expanded");
+
+  document.getElementById("islandStatus").textContent =
+
+    "● TOOL EVENT CONFIRMED";
+
+  document.getElementById("activeTool").textContent =
+
+    `${tool} · ${query}`;
+
+  clearTimeout(hideTimer);
+
+  hideTimer = setTimeout(() => {
+
+    island.classList.remove("expanded");
+
+    document.getElementById("islandStatus").textContent =
+
+      "SKILL NEXUS · READY";
+
+    document.getElementById("activeTool").textContent = "";
+
+  }, 8000);
+
+}
+
+async function callTool(tool, query) {
+
+  if (tool !== "BROWSER") {
+
+    throw new Error("아직 실제 실행기가 연결되지 않았습니다.");
+
+  }
+
+  if (!window.SkillNexusAndroid ||
+
+      typeof window.SkillNexusAndroid.openSearch !== "function") {
+
+    throw new Error("Android 검색 브리지가 아직 연결되지 않았습니다.");
+
+  }
+
+  const accepted = window.SkillNexusAndroid.openSearch(query);
+
+  if (accepted !== true) {
+
+    throw new Error("검색 실행 요청이 승인되지 않았습니다.");
+
+  }
+
+  return { tool, status: "LAUNCHED" };
+
+}
+
+async function send() {
+
+  const input = document.getElementById("userInput");
+
+  const query = input.value.trim();
+
+  if (!query) return;
+
+  input.value = "";
+
+  addMessage("user", query);
+
+  const tools = detectTools(query);
+
+  if (tools.length === 0) {
+
+    addMessage("ai", "일반 입력입니다. 도구를 호출하지 않았습니다.");
+
+    return;
+
+  }
+
+  for (const tool of tools) {
+
+    try {
+
+      const result = await callTool(tool, query);
+
+      addEventLog(tool, query, result.status);
+
+      expandIsland(tool, query);
+
+      addMessage("ai", `${tool} 실행 요청을 전달했습니다.`);
+
+    } catch (error) {
+
+      addEventLog(tool, query, "FAILED");
+
+      addMessage("ai", `${tool}: ${error.message}`);
+
+    }
+
+  }
+
+}
+
+document.getElementById("sendButton")
+
+  .addEventListener("click", send);
+
+document.getElementById("userInput")
+
+  .addEventListener("keydown", event => {
+
+    if (event.key === "Enter") send();
+
+  });
+
 </script>
+
 </body>
+
 </html>
