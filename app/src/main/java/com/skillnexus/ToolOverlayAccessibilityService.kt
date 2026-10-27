@@ -24,7 +24,6 @@ class ToolOverlayAccessibilityService : AccessibilityService() {
     private lateinit var windowManager: WindowManager
     private var overlay: SkillOverlayView? = null
     private val handler = Handler(Looper.getMainLooper())
-    private var hideRunnable: Runnable? = null
     private var lastSignal = ""
     private var serviceReady = false
 
@@ -60,8 +59,21 @@ class ToolOverlayAccessibilityService : AccessibilityService() {
         // event caused the overlay to repeatedly disappear and reappear.
         if (packageName == applicationContext.packageName) return
         if (packageName !in monitoredPackages) {
-            // Let the inactivity timeout hide the overlay. Do not remove it because
-            // of keyboard, launcher, or system-window events.
+            // Content-change events from keyboards and system UI are frequent.
+            // Only a real window transition should hide the overlay; never use an
+            // inactivity timer, because streaming responses produce event gaps.
+            val systemPackages = setOf(
+                "com.android.systemui",
+                "com.google.android.inputmethod.latin",
+                "com.samsung.android.honeyboard",
+                "com.android.inputmethod.latin",
+                "com.google.android.inputmethod.latin.beta"
+            )
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                packageName !in systemPackages
+            ) {
+                hideOverlay()
+            }
             return
         }
 
@@ -137,21 +149,14 @@ class ToolOverlayAccessibilityService : AccessibilityService() {
                 overlay?.setSkill(skill)
             }
 
-            // Maintain one timeout only. Repeated accessibility events extend the
-            // visible period without removing/re-adding the overlay view.
-            hideRunnable?.let(handler::removeCallbacks)
-            hideRunnable = Runnable {
-                hideRunnable = null
-                removeOverlayNow()
-            }
-            handler.postDelayed(hideRunnable!!, 2800L)
+            // Keep the same overlay attached while the monitored app is active.
+            // A timeout here made it disappear during quiet periods and reappear
+            // on the next event, which looked like rapid flickering.
         }
     }
 
     private fun hideOverlay() {
         handler.post {
-            hideRunnable?.let(handler::removeCallbacks)
-            hideRunnable = null
             removeOverlayNow()
         }
     }
