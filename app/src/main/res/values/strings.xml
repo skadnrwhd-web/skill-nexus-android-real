@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Skill Nexus REAL</string>
+    <string name="skill_nexus_accessibility_description">Shows a brief Skill Nexus overlay when possible activity is detected in selected AI apps. Detection is heuristic and does not confirm internal tool calls.</string>
+</resources>
